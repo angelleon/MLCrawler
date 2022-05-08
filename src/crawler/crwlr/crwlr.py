@@ -1,11 +1,12 @@
 from multiprocessing import Event, Queue
 from random import choice
 from urllib.parse import urlparse
-from logging import getLogger, DEBUG
+from logging import getLogger, basicConfig, DEBUG
 
 import requests
 
-log = getLogger(__name__, level=DEBUG)
+basicConfig(level=DEBUG)
+log = getLogger(__name__)
 
 """https://developers.whatismybrowser.com/useragents/explore/"""
 user_agents = (
