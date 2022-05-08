@@ -24,8 +24,10 @@ user_agents = (
      "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"),
 )
 
+
 def extractor() -> tuple[str, float, str]:
     raise NotImplementedError
+
 
 def fetcher(url: str, buffer: Queue, stop_env: Event):
     user_agent = choice(user_agents)
@@ -36,12 +38,17 @@ def fetcher(url: str, buffer: Queue, stop_env: Event):
     buffer.put(resp)
 
 
+def save():
+    pass
+
+
 def processer(buffer: Queue, timeout: int, output, stop_env: Event):
     while not stop_env.is_set():
         if resp := buffer.get(timeout=timeout) is None:
             break
         product, price, url = extractor(resp)
         save(output, product, price, url)
+
 
 def load_categories(path: str) -> list[str]:
     categories = []
