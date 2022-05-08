@@ -1,6 +1,6 @@
 from argparse import ArgumentParser
 
-import crwlr
+from . import crawler
 
 
 def main(stop_ev):
