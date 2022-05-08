@@ -1,7 +1,11 @@
 from multiprocessing import Event, Queue
 from random import choice
+from urllib.parse import urlparse
+from logging import getLogger, DEBUG
 
 import requests
+
+log = getLogger(__name__, level=DEBUG)
 
 """https://developers.whatismybrowser.com/useragents/explore/"""
 user_agents = (
@@ -20,6 +24,8 @@ user_agents = (
      "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"),
 )
 
+def extractor() -> tuple[str, float, str]:
+    raise NotImplementedError
 
 def fetcher(url: str, buffer: Queue, stop_env: Event):
     user_agent = choice(user_agents)
@@ -30,11 +36,30 @@ def fetcher(url: str, buffer: Queue, stop_env: Event):
     buffer.put(resp)
 
 
-def processer(buffer: Queue, timeout: int = 2, stop_env: Event):
+def processer(buffer: Queue, timeout: int, output, stop_env: Event):
     while not stop_env.is_set():
         if resp := buffer.get(timeout=timeout) is None:
             break
+        product, price, url = extractor(resp)
+        save(output, product, price, url)
+
+def load_categories(path: str) -> list[str]:
+    categories = []
+    with open(path) as f:
+        for line in f.readlines():
+            try:
+                urlparse(line)
+                categories.append(line)
+            except ValueError:
+                log.error(f"Error parsing url [{line}]")
+                raise
+            # TODO: make this meaningful or remove
+            except Exception as ex:
+                log.error(f"Error parsing url [{line}]")
+                raise
+    return categories
 
 
-def start(*args, **kwargs):
+def start(categories, *args, **kwargs):
+    categories = load_categories(categories)
     stop_env = Event()
