@@ -37,7 +37,8 @@ jobs:
           flake8 src --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
       - name: Test with pytest
         run: |
-          pytest
+          cd src
+          python -m pytest .
       - name: Build docker container
         run: |
           docker build -t angel97ll/mlcrawler:devel .
