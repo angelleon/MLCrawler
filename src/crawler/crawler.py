@@ -1,9 +1,9 @@
 from argparse import ArgumentParser
 
-from . import crawler
+from . import crwlr
 
 
-def main(stop_ev):
+def main():
     kwargs = dict()
     parser = ArgumentParser()
     parser.add_argument('-c', '--categories', help='file containing categories, one per line', default='categories.txt')
