@@ -1,12 +1,13 @@
 FROM python:3.10-bullseye as build
 COPY ./src /app
+COPY requirements.txt /app/
 WORKDIR /app
-RUN apt update
-RUN apt upgrade -y
-RUN pip install -y --upgrade pip
-RUN pip install -y virtualenv
+RUN apt-get update
+RUN apt-get upgrade -y
+RUN pip install --upgrade pip
+RUN pip install virtualenv
 RUN python -m virtualenv venv
-RUN . venv/bin/activate.sh
+RUN . venv/bin/activate
 RUN pip install -r requirements.txt
 
 FROM python:3.10-bullseye as runtime
