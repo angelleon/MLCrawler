@@ -1,12 +1,19 @@
 from multiprocessing import Event, Queue
 from random import choice
-from urllib.parse import urlparse
+from urllib.parse import urlparse, ParseResult
 from logging import getLogger, basicConfig, DEBUG
+import re
+from itertools import starmap
 
 import requests
 
 basicConfig(level=DEBUG)
 log = getLogger(__name__)
+
+# TODO: make this configurable for arbitrary web crawler
+allowed_domains = ['mercadolibre.com.mx']
+
+domain_regexps = [re.compile(f'\\w*\\.{domain}') for domain in allowed_domains]
 
 """https://developers.whatismybrowser.com/useragents/explore/"""
 user_agents = (
@@ -50,21 +57,26 @@ def processer(buffer: Queue, timeout: int, output, stop_env: Event):
         product, price, url = extractor(resp)
         save(output, product, price, url)
 
+# TODO: improve this, this has cuadratic complexity or even more 
+def check_domain(url: ParseResult):
+    return all(
+        starmap(
+            lambda domain, regex: url.netloc.endswith(domain) or regex.search(url.path) is not None,
+            zip(
+                allowed_domains,
+                domain_regexps)))
+
 
 def load_categories(path: str) -> list[str]:
     categories = []
-    with open(path) as f:
-        for line in f.readlines():
-            try:
-                urlparse(line)
-                categories.append(line)
-            except ValueError:
-                log.error(f"Error parsing url [{line}]")
-                raise
-            # TODO: make this meaningful or remove
-            except Exception as ex:
-                log.error(f"Error parsing url [{line}]")
-                raise
+    f = open(path)
+    for line in f.readlines():
+        url = urlparse(line)
+        if not check_domain(url):
+            raise ValueError(
+                'Cannot find a valid url from allowed domains')
+        categories.append(line)
+    f.close()
     return categories
 
 
