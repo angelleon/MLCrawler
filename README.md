@@ -20,7 +20,7 @@
     ```
 2. Run
     ```shell
-    usage: crawler.py [-h] [-c CATEGORIES] [-p PAGES] [-o OUTPUT] [-n NUM_PROCS] [-t TIMEOUT_Q]
+    usage: crawler.py [-h] [-c CATEGORIES] [-p PAGES] [-o OUTPUT_LINKS] [-O OUTPUT_DETAILS] [-n NUM_PROCS] [-t TIMEOUT_Q]
 
     options:
     -h, --help            show this help message and exit
@@ -28,7 +28,9 @@
                         file containing categories, one per line
     -p PAGES, --pages PAGES
                         number search of pages to fetch and analyze
-    -o OUTPUT, --output OUTPUT
+    -o OUTPUT_LINKS, --output-links OUTPUT_LINKS
+                        file to write the search results on
+    -O OUTPUT_DETAILS, --output-details OUTPUT_DETAILS
                         file to write the results on
     -n NUM_PROCS, --num-procs NUM_PROCS
                         Number of processes
@@ -45,7 +47,8 @@
     ```shell
     -c categories.txt
     -p 10
-    -o results.csv
+    -o product_links.json
+    -O product_info.json
     -n 5
     -t 0.01
     ```
