@@ -65,8 +65,8 @@ class PageType(Enum):
 price_regex = re.compile(r'\d+(\.\d\d)?')
 old_price_regex = re.compile(
     r'"andes-visually-hidden">(Precio anterior: )?\d+(\.\d\d)? pesos')
-brand_regex = re.compile(r'Marca.*</span>')
-brand_left_wrapper_regex = re.compile(r'<span.*>')
+brand_regex = re.compile(r'Marca</th>.*\w+</span>')
+brand_wrapper_regex = re.compile(r'<span class="andes-table__column--value">\w+</span>')
 
 # TODO: add behavior to this class
 
@@ -209,20 +209,30 @@ def extract_product(document_tree: Bs) -> ProductInfo:
         class_='ui-vpp-highlighted-specs__striped-specs')
     brand_container_html = str(brand_container)
     brand_match = brand_regex.search(brand_container_html)
+    if brand_match is None:
+        log.debug(f'{brand_container_html=}')
     brand_container_html = brand_container_html[brand_match.start(
     ):brand_match.end()]
-    brand_left_wrapper_match = brand_left_wrapper_regex.search(
+    #log.debug(f'{brand_container_html=}')
+    brand_wrapper_match = brand_wrapper_regex.search(
         brand_container_html)
-    brand_container_html = brand_container_html[brand_left_wrapper_match.end(
-    ):]
+    log.debug(f'{brand_wrapper_match=}')
+    # brand_container_html = brand_container_html[brand_wrapper_match.start(
+    # ):brand_wrapper_match.end(
+    # )]
+    brand_container_html = brand_wrapper_match.group(0)
+    log.debug(f'{brand_container_html=}')
     brand = brand_container_html.replace('</span>', '')
+    pos = brand.find('>')
+    brand = brand[pos+1:]
+    log.debug(f'{brand=}')
     # Extract image url
     img_container = document_tree.find(
         class_='ui-pdp-image ui-pdp-gallery__figure__image')
     image_url = img_container.attrs['src']
     product_info = ProductInfo(description=description, price=price,
                                old_price=old_price, image_url=image_url, brand=brand)
-    log.debug(f'Extracted product {product_info}')
+    #log.debug(f'Extracted product {product_info}')
     return product_info
 
 
@@ -266,13 +276,13 @@ def save_product_info(storage_queue: Queue, product_info_file: TextIOWrapper, st
             product_info: ProductInfo = storage_queue.get(timeout=q_timeout)
         except QEmpty:
             continue
-        log.debug(('=' * 50) + 'Saving details')
+        log.debug('Saving details')
         storage_lock.acquire()
         dump(serialize_dataclass(product_info), product_info_file)
         product_info_file.write(',')
         product_info_file.flush()
         storage_lock.release()
-        log.debug(('=' * 50) + 'Saved details')
+        log.debug('Saved details')
         data_lock.acquire()
         category: CategoryStatus = category_status[product_info.base_url]
         category.saved_products += 1
@@ -286,13 +296,13 @@ def save_product_link(storage_queue: Queue, product_links_file: TextIOWrapper, s
             product_info: ProductInfo = storage_queue.get(timeout=q_timeout)
         except QEmpty:
             continue
-        log.debug(('*' * 50) + 'Saving link')
+        log.debug('Saving link')
         storage_lock.acquire()
         dump(serialize_dataclass(product_info), product_links_file)
         product_links_file.write(',')
         product_links_file.flush()
         storage_lock.release()
-        log.debug(('*' * 50) + 'Saved link')
+        log.debug('Saved link')
         data_lock.acquire()
         category: CategoryStatus = category_status[product_info.base_url]
         category.saved_product_links += 1
