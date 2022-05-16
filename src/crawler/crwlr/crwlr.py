@@ -7,6 +7,8 @@ import re
 from itertools import starmap, chain
 from collections import namedtuple
 from queue import Empty as QEmpty
+from dataclasses import dataclass
+from enum import Enum
 
 import requests
 from bs4 import BeautifulSoup as Bs
@@ -34,6 +36,27 @@ ResultPage = namedtuple(
     "ResultPage", ['base_url', 'page_number', 'url'])
 
 
+class PageType(Enum):
+    SEARCH_PAGE = 1
+    PRODUCT_PAGE = 2
+
+
+@dataclass
+class Page:
+    base_url: str = ''
+    url: str = ''
+    page_type: PageType = PageType.SEARCH_PAGE
+    page_number: int = 1
+    response: requests.Response = None
+
+
+@dataclass
+class CategoryStatus:
+    completed: bool = False
+    total_products: int = 0
+    total_pages: int = 0
+
+
 """https://developers.whatismybrowser.com/useragents/explore/"""
 user_agents = (
     UserAgent("Edge",     "98", "Win10",
@@ -58,13 +81,15 @@ PRODUCT_PAGE = 1
 
 # TODO: improve error handling
 # TODO: avoid passing unnecesary arguments, maybe use dict expansion
-def extractor(url_type: int, resp: requests.Response, base_url) -> dict:
+def extractor(page: Page) -> list[Page]:
+    print(f'Extracting page {page}')
     page_content = []
-    page = Bs(resp.content, 'lxml')
+    document_tree = Bs(page.response.text, 'lxml')
     # TODO: complete definition here
     # TODO: refactor these condition
-    if url_type == SEARCH_PAGE:
-        page_number = page.find(
+    if page.page_type == PageType.SEARCH_PAGE:
+        print(f'Processing search page {page}')
+        page_number = document_tree.find(
             class_='andes-pagination__button andes-pagination__button--current')
         has_sigle_result_page = page_number is None
         if has_sigle_result_page:
@@ -74,34 +99,34 @@ def extractor(url_type: int, resp: requests.Response, base_url) -> dict:
                 class_='andes-pagination__link').text)
         if page_number > max_pages:
             return
-        results_container = page.find_all(class_='ui-search-results')[0]
+        results_container = document_tree.find_all(class_='ui-search-results')[0]
         for item_container in results_container.find_all('ui-search-layout__item'):
+            print(f'Processing item contianer {item_container}')
             a = item_container.find(class_='ui-search-link')
-            link = a.attrs['href']
-            page_content.append({'url_type': PRODUCT_PAGE, 'url': link})
+            url = a.attrs['href']
+            product_page = Page(page.base_url, url=url, page_type=PageType.PRODUCT_PAGE, page_number=page_number)
+            page_content.append(product_page)
         # a tag
         # FIXME: check when this is not present
-        next_button = page.find_all(
+        next_button = document_tree.find_all(
             class_='andes-pagination__link ui-search-link')
         next_button = next_button[1 if len(next_button) == 2 else 0]
-        link = next_button.attrs['href']
-        print(f'Adding search page {link}')
+        url = next_button.attrs['href']
         # TODO: avoid innecesary data duplication
-        page_content.append({'url_type': SEARCH_PAGE, 'url': link, 'base_url': base_url})
+        search_page = Page(base_url=page.base_url, url=url, page_type=PageType.SEARCH_PAGE, page_number=page_number+1)
+        page_content.append(
+            search_page)
         return page_content
-    elif url_type == PRODUCT_PAGE:
-        pass
+    elif page.page_type == PageType.PRODUCT_PAGE:
+        print(f'Extracting product {page=}')
 
 
 def fetcher(url_queue: Queue, response_queue: Queue, stop_ev: Event, category_fetch_completed: Event):
     while not stop_ev.is_set():
         #print('Executing fetcher loop')
         try:
-            url_info = url_queue.get(timeout=1)
-            print(url_info)
-            url_type = url_info['url_type']
-            url = url_info['url']
-            base_url = url_info['base_url']
+            page: Page = url_queue.get(timeout=1)
+            print(page)
         except QEmpty as ex:
             #print('Continuing with next iteration')
             if category_fetch_completed.is_set():
@@ -112,10 +137,15 @@ def fetcher(url_queue: Queue, response_queue: Queue, stop_ev: Event, category_fe
         headers = {
             "User-Agent": user_agent[1]
         }
-        #print(f"Fetching url [{url}]")
-        resp = requests.get(url, headers=headers)
-        print(f"Completed fetch of url [{url}]")
-        response_queue.put({'url_type': url_type, 'content': resp, 'base_url': base_url})
+        print(f"Fetching url [{page.url}]")
+        resp = requests.get(page.url, headers=headers)
+        if resp.status_code != 200:
+            print(f"Failed fetch of url [{page.url}]")
+            url_queue.put(page)
+            continue
+        print(f"Completed fetch of url [{page.url}]")
+        page.response = resp
+        response_queue.put(page)
     else:
         #print('Exitting fetcher loop')
         return
@@ -133,28 +163,30 @@ def save_product_link(*args, **kwargs):
 def processor(response_queue: Queue, url_queue: Queue, timeout: int, stop_env: Event, category_status: dict, category_fetch_completed: Event):
     while not stop_env.is_set():
         try:
-            resp = response_queue.get(timeout=timeout)
+            page: Page = response_queue.get(timeout=timeout)
         except QEmpty as ex:
             # print(ex)
             # print(type(ex))
             continue
         # TODO: improve method signature (maybe using dict expansion)
-        page_info = extractor(resp['url_type'], resp['content'], resp['base_url'])
-        base_url = resp['base_url']
-        if page_info is None:
-            category_status[base_url]['category_fetch_completed'] = True
+        extracted_pages = extractor(page)
+        if extracted_pages is None:
+            category_status[page.base_url]['category_fetch_completed'] = True
             if all(category_status[k]['category_fetch_completed'] for k in category_status):
                 category_fetch_completed.set()
             continue
-        if resp['url_type'] == SEARCH_PAGE:
-            for info in page_info:
-                if info['url_type'] == SEARCH_PAGE:
-                    url_queue.put(info)
+        print(f'{extracted_pages=}')
+        if page.page_type == PageType.SEARCH_PAGE:
+            for extracted_page in extracted_pages:
+                if extracted_page.page_type == PageType.SEARCH_PAGE:
+                    #print(f'Adding search page {extracted_page}')
+                    #url_queue.put(extracted_page)
                     continue
-                save_product_link(info)
-                url_queue.put(info)
+                save_product_link(extracted_page)
+                print(f'Adding product page {extracted_page}')
+                url_queue.put(extracted_page)
         else:
-            save_product_info(page_info)
+            save_product_info(extracted_pages)
 
 
 def check_domain(url: ParseResult):
@@ -182,7 +214,8 @@ def load_categories(path: str) -> list[str]:
     return categories
 
 
-def start(categories, *args, **kwargs):
+def start(categories, num_pages: int, num_procs: int, *args, **kwargs):
+    print(f'Runnig with args {categories=}, {num_pages=}, {num_procs=}')
     categories = load_categories(categories)
     url_queue = Queue()
     response_queue = Queue()
@@ -193,13 +226,15 @@ def start(categories, *args, **kwargs):
     fetchers = []
     processors = []
     for url in categories:
-        url_queue.put({'url_type': SEARCH_PAGE, 'url': url, 'base_url': url})
-    for _ in range(fetchers_number):
+        page = Page(base_url=url, url=url,
+                    page_type=PageType.SEARCH_PAGE, page_number=1)
+        url_queue.put(page)
+    for _ in range(num_procs):
         f = Process(target=fetcher, args=(
             url_queue, response_queue, stop_ev, category_fetch_completed))
         f.start()
         fetchers.append(f)
-    for _ in range(processors_number):
+    for _ in range(num_procs):
         p = Process(target=processor, args=(response_queue, url_queue,
                     1, stop_ev, category_status, category_fetch_completed))
         p.start()
