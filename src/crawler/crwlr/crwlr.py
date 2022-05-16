@@ -40,7 +40,7 @@ class PageType(Enum):
     SEARCH_PAGE = 1
     PRODUCT_PAGE = 2
 
-
+# TODO: add behavior to this class
 @dataclass
 class Page:
     base_url: str = ''
@@ -101,7 +101,7 @@ def extractor(page: Page) -> list[Page]:
             return
         results_container = document_tree.find_all(class_='ui-search-results')[0]
         for item_container in results_container.find_all('ui-search-layout__item'):
-            print(f'Processing item contianer {item_container}')
+            print(f'Processing {item_container=}')
             a = item_container.find(class_='ui-search-link')
             url = a.attrs['href']
             product_page = Page(page.base_url, url=url, page_type=PageType.PRODUCT_PAGE, page_number=page_number)
