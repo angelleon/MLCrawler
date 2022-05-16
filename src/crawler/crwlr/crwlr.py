@@ -88,6 +88,7 @@ class CategoryStatus:
     total_products: int = 0
     completed_products:  int = 0
     saved_products: int = 0
+    saved_product_links: int = 0
     base_url: str = ''
 
 
@@ -98,6 +99,11 @@ class ProductInfo:
     old_price: str = ''
     brand: str = ''
     image_url: str = ''
+    base_url: str = ''
+
+@dataclass()
+class LinkInfo:
+    url: str = ''
     base_url: str = ''
 
 
@@ -128,7 +134,7 @@ PRODUCT_PAGE = 1
 
 
 # TODO: improve error handling
-def extract_search(page: Page, document_tree: Bs):
+def extract_search(page: Page, document_tree: Bs) -> list[Page]:
     page_content = []
     #log.debug(f'Extracting search {page=}')
     page_number = document_tree.find(
@@ -274,12 +280,27 @@ def save_product_info(storage_queue: Queue, product_info_file: TextIOWrapper, st
         data_lock.release()
 
 
-def save_product_link(*args, **kwargs):
-    pass
-
+def save_product_link(storage_queue: Queue, product_links_file: TextIOWrapper, storage_lock: Lock, stop_ev: Event, q_timeout: float, category_status: dict[CategoryStatus], data_lock: Lock):
+    while not stop_ev.is_set():
+        try:
+            product_info: ProductInfo = storage_queue.get(timeout=q_timeout)
+        except QEmpty:
+            continue
+        log.debug(('*' * 50) + 'Saving link')
+        storage_lock.acquire()
+        dump(serialize_dataclass(product_info), product_links_file)
+        product_links_file.write(',')
+        product_links_file.flush()
+        storage_lock.release()
+        log.debug(('*' * 50) + 'Saved link')
+        data_lock.acquire()
+        category: CategoryStatus = category_status[product_info.base_url]
+        category.saved_product_links += 1
+        category_status[product_info.base_url] = category
+        data_lock.release()
 
 # TODO: improve function signature
-def processor(response_queue: Queue, url_queue: Queue, q_timeout: float, stop_env: Event, category_status: dict, data_lock: Lock, storage_q: Queue):
+def processor(response_queue: Queue, url_queue: Queue, q_timeout: float, stop_env: Event, category_status: dict, data_lock: Lock, storage_info_q: Queue, storage_links_q: Queue):
     product_count = 0
     while not stop_env.is_set():
         try:
@@ -298,7 +319,8 @@ def processor(response_queue: Queue, url_queue: Queue, q_timeout: float, stop_en
                     log.debug(f'Adding search page {extracted_page}')
                     url_queue.put(extracted_page)
                 elif extracted_page.page_type == PageType.PRODUCT_PAGE:
-                    save_product_link(extracted_page)
+                    link_info = LinkInfo(url=extracted_page.url, base_url=page.base_url)
+                    storage_links_q.put(link_info)
                     category.total_products += 1
                     log.debug(f'Adding product page {extracted_page}')
                     url_queue.put(extracted_page)
@@ -309,7 +331,7 @@ def processor(response_queue: Queue, url_queue: Queue, q_timeout: float, stop_en
         elif page.page_type == PageType.PRODUCT_PAGE:
             extracted_info: ProductInfo = extract_product(document_tree)
             extracted_info.base_url = page.base_url
-            storage_q.put(extracted_info)
+            storage_info_q.put(extracted_info)
             with data_lock:
                 category: CategoryStatus = category_status[page.base_url]
                 completed_products = category.completed_products
@@ -349,7 +371,8 @@ def category_is_completed(category: CategoryStatus):
     return (
         category.total_products == category.completed_products and
         category.total_search_pages == category.completed_search_pages and
-        category.saved_products == category.total_products
+        category.saved_products == category.total_products and
+        category.saved_product_links == category.total_products
     )
 
 
@@ -370,8 +393,10 @@ def start(categories, num_pages: int, num_procs: int, output_links: str, output_
     processors = []
     category_status = mgr.dict()
     data_lock = mgr.Lock()
-    storage_queue = mgr.Queue()
-    storage_lock = mgr.Lock()
+    storage_info_q = mgr.Queue()
+    storage_links_q = mgr.Queue()
+    storage_info_lock = mgr.Lock()
+    storage_links_lock = mgr.Lock()
     for url in categories:
         page = Page(base_url=url, url=url,
                     page_type=PageType.SEARCH_PAGE, page_number=1)
@@ -385,13 +410,16 @@ def start(categories, num_pages: int, num_procs: int, output_links: str, output_
         fetchers.append(f)
     for _ in range(num_procs):
         p = Process(target=processor, args=(response_queue, url_queue,
-                    q_timeout, stop_ev, category_status, data_lock, storage_queue))
+                    q_timeout, stop_ev, category_status, data_lock, storage_info_q, storage_links_q))
         p.start()
         processors.append(p)
     #links_storage_process = Process(target=None)
     details_storage_process = Process(target=save_product_info, args=(
-        storage_queue, f_details, storage_lock, stop_ev, q_timeout, category_status, data_lock))
+        storage_info_q, f_details, storage_info_lock, stop_ev, q_timeout, category_status, data_lock))
     details_storage_process.start()
+    links_storage_process = Process(target=save_product_link, args=(
+        storage_links_q, f_links, storage_links_lock, stop_ev, q_timeout, category_status, data_lock))
+    links_storage_process.start()
     while not stop_ev.is_set():
         sleep(5)
         data_lock.acquire()
@@ -402,12 +430,17 @@ def start(categories, num_pages: int, num_procs: int, output_links: str, output_
     for p in chain(fetchers, processors):
         p.join()
     details_storage_process.join()
+    links_storage_process.join()
     # FIXME: remove this extra object and traling comma
-    storage_lock.acquire()
+    storage_info_lock.acquire()
     f_links.write('{}]')
-    f_details.write('{}]')
-    f_links.flush()
     f_details.flush()
-    storage_lock.release()
-    f_links.close()
+    storage_info_lock.release()
+
+    storage_links_lock.acquire()
+    f_links.flush()
+    f_details.write('{}]')
+    storage_links_lock.release()
+
     f_details.close()
+    f_links.close()
