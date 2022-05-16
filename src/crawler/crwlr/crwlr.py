@@ -1,4 +1,4 @@
-from multiprocessing import Event, Queue, Process, Lock
+from multiprocessing import Event, Queue, Process, Lock, Manager
 from random import choice
 from unicodedata import name
 from urllib.parse import urlparse, urlunparse, ParseResult
@@ -9,13 +9,14 @@ from collections import namedtuple
 from queue import Empty as QEmpty
 from dataclasses import dataclass
 from enum import Enum
+from time import sleep
 
 import requests
 from bs4 import BeautifulSoup as Bs
 
 basicConfig(
-    level=DEBUG
-    # level=ERROR
+    #level=DEBUG
+    level=ERROR
 )
 log = getLogger(__name__)
 
@@ -57,11 +58,12 @@ class Page:
 
 @dataclass
 class CategoryStatus:
-    base_url: str = ''
     completed: bool = False
+    total_search_pages: int = 0
+    completed_search_pages: int = 0
     total_products: int = 0
     completed_products:  int = 0
-    total_pages: int = 0
+    base_url: str = ''
 
 
 """https://developers.whatismybrowser.com/useragents/explore/"""
@@ -95,7 +97,7 @@ def extractor(page: Page) -> list[Page]:
     # TODO: complete definition here
     # TODO: refactor these conditions, look for an adequate design pattern
     if page.page_type == PageType.SEARCH_PAGE:
-        log.debug(f'Extracting search {page=}')
+        #log.debug(f'Extracting search {page=}')
         page_number = document_tree.find(
             class_='andes-pagination__button andes-pagination__button--current')
         has_single_result_page = page_number is None
@@ -104,16 +106,14 @@ def extractor(page: Page) -> list[Page]:
         else:
             page_number = int(page_number.find(
                 class_='andes-pagination__link').text)
-        if page_number > max_pages:
-            return
         results_container: Bs = document_tree.find_all(
             class_='ui-search-results')[0]
-        log.debug(f'Extracting from contianer {repr(results_container)[:100]}')
+        #log.debug(f'Extracting from contianer {repr(results_container)[:100]}')
         item_containers = results_container.find_all(
             class_='ui-search-layout__item')
-        log.debug(f'Item containers {len(item_containers)}')
+        #log.debug(f'Item containers {len(item_containers)}')
         for item_container in item_containers:
-            log.debug(f'Extracting {item_container=}')
+            #log.debug(f'Extracting {item_container=}')
             a = item_container.find(class_='ui-search-link')
             url = a.attrs['href']
             product_page = Page(
@@ -132,7 +132,8 @@ def extractor(page: Page) -> list[Page]:
             search_page)
         return page_content
     elif page.page_type == PageType.PRODUCT_PAGE:
-        log.debug(f'Extracting product {page=}')
+        #log.debug(f'Extracting product {page=}')
+        pass
 
 
 def fetcher(url_queue: Queue, response_queue: Queue, stop_ev: Event, category_fetch_completed: Event, q_timeout: float):
@@ -141,7 +142,7 @@ def fetcher(url_queue: Queue, response_queue: Queue, stop_ev: Event, category_fe
         try:
             #print(repr(q_timeout), type(q_timeout))
             page: Page = url_queue.get(timeout=q_timeout)
-            log.debug(page)
+            #log.debug(page)
         except QEmpty as ex:
             #log.debug('Continuing with next iteration')
             if category_fetch_completed.is_set():
@@ -152,7 +153,7 @@ def fetcher(url_queue: Queue, response_queue: Queue, stop_ev: Event, category_fe
         headers = {
             "User-Agent": user_agent[1]
         }
-        log.debug(f"Fetching url [{page.url}]")
+        #log.debug(f"Fetching url [{page.url}]")
         resp = requests.get(page.url, headers=headers)
         f_name = page.url.replace('/', '-').replace(':', '')
         question_mark = f_name.find('?')
@@ -162,10 +163,10 @@ def fetcher(url_queue: Queue, response_queue: Queue, stop_ev: Event, category_fe
         f.write(resp.text)
         f.close()
         if resp.status_code != 200:
-            log.debug(f"Failed fetch of url [{page.url}]")
+            #log.debug(f"Failed fetch of url [{page.url}]")
             url_queue.put(page)
             continue
-        log.debug(f"Completed fetch of url [{page.url}]")
+        #log.debug(f"Completed fetch of url [{page.url}]")
         page.response = resp
         response_queue.put(page)
     else:
@@ -192,23 +193,37 @@ def processor(response_queue: Queue, url_queue: Queue, q_timeout: float, stop_en
             # log.debug(type(ex))
             continue
         # TODO: improve method signature (maybe using dict expansion)
+        category: CategoryStatus = category_status[page.base_url]
         extracted_pages = extractor(page)
         if extracted_pages is None:
-            category_status[page.base_url]['category_fetch_completed'] = True
-            if all(category_status[k]['category_fetch_completed'] for k in category_status):
-                category_fetch_completed.set()
+            data_lock.acquire()
+            
+            category.completed = True
+            data_lock.release()
             continue
-        log.debug(f'{extracted_pages=}')
+        #log.debug(f'{extracted_pages=}')
         if page.page_type == PageType.SEARCH_PAGE:
+            print('Awaiting for data lock')
+            data_lock.acquire()
+            print('Data lock acquirred')
+            i = 0
             for extracted_page in extracted_pages:
                 if extracted_page.page_type == PageType.SEARCH_PAGE:
-                    #log.debug(f'Adding search page {extracted_page}')
-                    # url_queue.put(extracted_page)
-                    continue
-                save_product_link(extracted_page)
-                log.debug(f'Adding product page {extracted_page}')
-                url_queue.put(extracted_page)
-        else:
+                    print(f'Current page number {page.page_number}, extracted page number {extracted_page.page_number}')
+                if extracted_page.page_type == PageType.SEARCH_PAGE and extracted_page.page_number <= category.total_search_pages:
+                    #print(f'Adding search page {extracted_page}')
+                    #category.completed_search_pages += 1
+                    url_queue.put(extracted_page)
+                else:
+                    save_product_link(extracted_page)
+                    category.total_products += 1
+                    #log.debug(f'Adding product page {extracted_page}')
+                    #url_queue.put(extracted_page)
+            category.completed_search_pages += 1
+            category_status[page.base_url] = category
+            print(f'SP {category_status}')
+            data_lock.release()
+        elif page.page_type == PageType.PRODUCT_PAGE:
             save_product_info(extracted_pages)
 
 
@@ -239,22 +254,21 @@ def load_categories(path: str) -> list[str]:
 
 
 def start(categories, num_pages: int, num_procs: int, f_output: str, q_timeout, *args, **kwargs):
-    log.debug(f'Runnig with args {categories=}, {num_pages=}, {num_procs=}')
+    print(f'Runnig with args {categories=}, {num_pages=}, {num_procs=}')
+    mgr = Manager()
     categories = load_categories(categories)
     url_queue = Queue()
     response_queue = Queue()
-    stop_ev = Event()
-    category_fetch_completed = Event()
-    category_status = {k: {'category_fetch_completed': False}
-                       for k in categories}
+    stop_ev = mgr.Event()
+    category_fetch_completed = mgr.Event()
     fetchers = []
     processors = []
-    category_status = dict()
-    data_lock = Lock()
+    category_status = mgr.dict()
+    data_lock = mgr.Lock()
     for url in categories:
         page = Page(base_url=url, url=url,
                     page_type=PageType.SEARCH_PAGE, page_number=1)
-        status = CategoryStatus()
+        status = CategoryStatus(base_url=url, total_search_pages=num_pages)
         category_status[url] = status
         url_queue.put(page)
     for _ in range(num_procs):
@@ -267,5 +281,12 @@ def start(categories, num_pages: int, num_procs: int, f_output: str, q_timeout, 
                     q_timeout, stop_ev, category_status, category_fetch_completed, data_lock))
         p.start()
         processors.append(p)
+    while not stop_ev.is_set():
+        sleep(5)
+        data_lock.acquire()
+        print(f'MP {category_status}')
+        if all(category_status[k].completed for k in category_status):
+            stop_ev.set()
+        data_lock.release()
     for p in chain(fetchers, processors):
         p.join()
