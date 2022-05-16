@@ -252,13 +252,13 @@ def fetcher(url_queue: Queue, response_queue: Queue, stop_ev: Event, q_timeout: 
         }
         log.debug(f"Fetching url [{page.url}]")
         resp = requests.get(page.url, headers=headers)
-        f_name = page.url.replace('/', '-').replace(':', '')
+        #f_name = page.url.replace('/', '-').replace(':', '')
         question_mark = f_name.find('?')
         if question_mark >= 0:
             f_name = f_name[:question_mark]
-        f = open(f'{f_name}.html', 'w')
-        f.write(resp.text)
-        f.close()
+        #f = open(f'{f_name}.html', 'w')
+        #f.write(resp.text)
+        #f.close()
         if resp.status_code != 200:
             log.debug(f"Failed fetch of url [{page.url}]")
             url_queue.put(page)
