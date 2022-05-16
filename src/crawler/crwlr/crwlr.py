@@ -184,9 +184,7 @@ def fetcher(url_queue: Queue, response_queue: Queue, stop_ev: Event, category_fe
         log.debug(f"Completed fetch of url [{page.url}]")
         page.response = resp
         response_queue.put(page)
-    else:
-        log.debug('Exitting fetcher loop')
-        return
+    log.debug('Exitting fetcher loop')
 
 
 def save_product_info(*args, **kwargs):
@@ -215,13 +213,9 @@ def processor(response_queue: Queue, url_queue: Queue, q_timeout: float, stop_en
             print('Awaiting for data lock')
             data_lock.acquire()
             print('Data lock acquirred')
-            i = 0
             for extracted_page in extracted_pages:
-                if extracted_page.page_type == PageType.SEARCH_PAGE:
-                    print(f'Current page number {page.page_number}, extracted page number {extracted_page.page_number}')
                 if extracted_page.page_type == PageType.SEARCH_PAGE and extracted_page.page_number <= category.total_search_pages:
-                    #print(f'Adding search page {extracted_page}')
-                    #category.completed_search_pages += 1
+                    print(f'Adding search page {extracted_page}')
                     url_queue.put(extracted_page)
                 elif extracted_page.page_type == PageType.PRODUCT_PAGE:
                     save_product_link(extracted_page)
@@ -239,6 +233,7 @@ def processor(response_queue: Queue, url_queue: Queue, q_timeout: float, stop_en
             category_status[page.base_url] = category
             data_lock.release()
         log.debug(f'{product_count=}')
+    log.debug('Exitting processor loop')
 
 
 
