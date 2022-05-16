@@ -2,7 +2,7 @@ from multiprocessing import Event, Queue, Process, Lock, Manager
 from random import choice
 from unicodedata import name
 from urllib.parse import urlparse, urlunparse, ParseResult
-from logging import getLogger, basicConfig, DEBUG, ERROR
+from logging import getLogger, basicConfig, DEBUG, ERROR, Filter, root as logging_root
 import re
 from itertools import starmap, chain
 from collections import namedtuple
@@ -15,10 +15,25 @@ import requests
 from bs4 import BeautifulSoup as Bs
 
 basicConfig(
-    #level=DEBUG
-    level=ERROR
+    level=DEBUG
+    #level=ERROR
 )
 log = getLogger(__name__)
+
+modname = __name__
+
+class CrwlrFilter(Filter):
+    def filter(self, record):
+        if record.name != modname:
+            print('Filtering out record', record, modname)
+            return False
+        return True
+
+filter = CrwlrFilter()
+
+for handler in logging_root.handlers:
+        handler.addFilter(filter)
+
 
 items_per_page = 48
 pages = 10
@@ -97,7 +112,7 @@ def extractor(page: Page) -> list[Page]:
     # TODO: complete definition here
     # TODO: refactor these conditions, look for an adequate design pattern
     if page.page_type == PageType.SEARCH_PAGE:
-        #log.debug(f'Extracting search {page=}')
+        log.debug(f'Extracting search {page=}')
         page_number = document_tree.find(
             class_='andes-pagination__button andes-pagination__button--current')
         has_single_result_page = page_number is None
@@ -108,12 +123,12 @@ def extractor(page: Page) -> list[Page]:
                 class_='andes-pagination__link').text)
         results_container: Bs = document_tree.find_all(
             class_='ui-search-results')[0]
-        #log.debug(f'Extracting from contianer {repr(results_container)[:100]}')
+        log.debug(f'Extracting from contianer {repr(results_container)[:100]}')
         item_containers = results_container.find_all(
             class_='ui-search-layout__item')
-        #log.debug(f'Item containers {len(item_containers)}')
+        log.debug(f'Item containers {len(item_containers)}')
         for item_container in item_containers:
-            #log.debug(f'Extracting {item_container=}')
+            log.debug(f'Extracting {item_container=}')
             a = item_container.find(class_='ui-search-link')
             url = a.attrs['href']
             product_page = Page(
@@ -132,19 +147,19 @@ def extractor(page: Page) -> list[Page]:
             search_page)
         return page_content
     elif page.page_type == PageType.PRODUCT_PAGE:
-        #log.debug(f'Extracting product {page=}')
+        log.debug(f'Extracting product {page=}')
         pass
 
 
 def fetcher(url_queue: Queue, response_queue: Queue, stop_ev: Event, category_fetch_completed: Event, q_timeout: float):
     while not stop_ev.is_set():
-        #log.debug('Executing fetcher loop')
+        log.debug('Executing fetcher loop')
         try:
             #print(repr(q_timeout), type(q_timeout))
             page: Page = url_queue.get(timeout=q_timeout)
-            #log.debug(page)
+            log.debug(page)
         except QEmpty as ex:
-            #log.debug('Continuing with next iteration')
+            log.debug('Continuing with next iteration')
             if category_fetch_completed.is_set():
                 break
             continue
@@ -153,7 +168,7 @@ def fetcher(url_queue: Queue, response_queue: Queue, stop_ev: Event, category_fe
         headers = {
             "User-Agent": user_agent[1]
         }
-        #log.debug(f"Fetching url [{page.url}]")
+        log.debug(f"Fetching url [{page.url}]")
         resp = requests.get(page.url, headers=headers)
         f_name = page.url.replace('/', '-').replace(':', '')
         question_mark = f_name.find('?')
@@ -163,14 +178,14 @@ def fetcher(url_queue: Queue, response_queue: Queue, stop_ev: Event, category_fe
         f.write(resp.text)
         f.close()
         if resp.status_code != 200:
-            #log.debug(f"Failed fetch of url [{page.url}]")
+            log.debug(f"Failed fetch of url [{page.url}]")
             url_queue.put(page)
             continue
-        #log.debug(f"Completed fetch of url [{page.url}]")
+        log.debug(f"Completed fetch of url [{page.url}]")
         page.response = resp
         response_queue.put(page)
     else:
-        #log.debug('Exitting fetcher loop')
+        log.debug('Exitting fetcher loop')
         return
 
 
@@ -201,7 +216,7 @@ def processor(response_queue: Queue, url_queue: Queue, q_timeout: float, stop_en
             category.completed = True
             data_lock.release()
             continue
-        #log.debug(f'{extracted_pages=}')
+        log.debug(f'{extracted_pages=}')
         if page.page_type == PageType.SEARCH_PAGE:
             print('Awaiting for data lock')
             data_lock.acquire()
@@ -217,7 +232,7 @@ def processor(response_queue: Queue, url_queue: Queue, q_timeout: float, stop_en
                 else:
                     save_product_link(extracted_page)
                     category.total_products += 1
-                    #log.debug(f'Adding product page {extracted_page}')
+                    log.debug(f'Adding product page {extracted_page}')
                     #url_queue.put(extracted_page)
             category.completed_search_pages += 1
             category_status[page.base_url] = category
