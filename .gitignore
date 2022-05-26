@@ -1,3 +1,5 @@
 *.pdf
 venv
 **/__pycache__
+**/test_categories.txt
+**/*.html
